@@ -1,0 +1,66 @@
+<%- include('../partials/header') %>
+
+<div class="account-page">
+  <h1 class="page-title">My Account</h1>
+
+  <div class="account-grid">
+    <div class="account-sidebar">
+      <div class="account-menu">
+        <a href="/auth/account" class="account-menu-item active">Profile</a>
+        <a href="/auth/reviews" class="account-menu-item">My Reviews</a>
+        <a href="/auth/orders" class="account-menu-item">My Orders</a>
+      </div>
+    </div>
+
+    <div class="account-content">
+      <% if (locals.success) { %>
+        <div class="alert alert-success"><%= success %></div>
+      <% } %>
+      <% if (locals.error) { %>
+        <div class="alert alert-error"><%= error %></div>
+      <% } %>
+
+      <div class="account-section">
+        <h2>Profile Information</h2>
+        <form action="/auth/account" method="POST" class="account-form">
+          <input type="hidden" name="action" value="profile">
+          <div class="form-group">
+            <label for="name">Full Name</label>
+            <input type="text" id="name" name="name" value="<%= customer.name %>" required>
+          </div>
+          <div class="form-group">
+            <label for="email">Email Address</label>
+            <input type="email" id="email" name="email" value="<%= customer.email %>" required>
+          </div>
+          <div class="form-group">
+            <label for="address">Shipping Address</label>
+            <textarea id="address" name="address" rows="3" placeholder="Enter your shipping address"><%= customer.address || '' %></textarea>
+          </div>
+          <button type="submit" class="btn btn-primary">Save Changes</button>
+        </form>
+      </div>
+
+      <div class="account-section">
+        <h2>Change Password</h2>
+        <form action="/auth/account" method="POST" class="account-form">
+          <input type="hidden" name="action" value="password">
+          <div class="form-group">
+            <label for="current_password">Current Password</label>
+            <input type="password" id="current_password" name="current_password" required minlength="6">
+          </div>
+          <div class="form-group">
+            <label for="new_password">New Password</label>
+            <input type="password" id="new_password" name="new_password" required minlength="6">
+          </div>
+          <div class="form-group">
+            <label for="confirm_password">Confirm New Password</label>
+            <input type="password" id="confirm_password" name="confirm_password" required minlength="6">
+          </div>
+          <button type="submit" class="btn btn-primary">Update Password</button>
+        </form>
+      </div>
+    </div>
+  </div>
+</div>
+
+<%- include('../partials/footer') %>
