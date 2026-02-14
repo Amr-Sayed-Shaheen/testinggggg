@@ -1,7 +1,5 @@
-// src/routes/auth.js
 const express = require('express');
 const router = express.Router();
-const bcrypt = require('bcryptjs');
 const { pool } = require('../db');
 
 router.get('/login', (req, res) => {
@@ -10,6 +8,7 @@ router.get('/login', (req, res) => {
 
 router.post('/login', async (req, res) => {
   const { email, password } = req.body;
+
   try {
     const result = await pool.query('SELECT * FROM customers WHERE email = $1', [email]);
     if (result.rows.length === 0) {
@@ -17,9 +16,13 @@ router.post('/login', async (req, res) => {
     }
 
     const customer = result.rows[0];
-    const hash = customer.password_hash || '';
-    const match = hash ? await bcrypt.compare(password, hash) : false;
+    const stored = customer.password_hash;
 
+    if (typeof stored !== 'string' || stored.length === 0) {
+      return res.render('auth/login', { error: 'Invalid email or password' });
+    }
+
+    const match = (password === stored);
     if (!match) {
       return res.render('auth/login', { error: 'Invalid email or password' });
     }
@@ -28,7 +31,6 @@ router.post('/login', async (req, res) => {
     req.session.customerName = customer.name;
     req.session.customerEmail = customer.email;
     req.session.customerAddress = customer.address || '';
-
     res.redirect('/');
   } catch (err) {
     console.error(err);
@@ -59,18 +61,15 @@ router.post('/register', async (req, res) => {
       return res.render('auth/register', { error: 'An account with this email already exists' });
     }
 
-    const hash = await bcrypt.hash(password, 10);
-
     const result = await pool.query(
       'INSERT INTO customers (name, email, password_hash) VALUES ($1, $2, $3) RETURNING id',
-      [name, email, hash]
+      [name, email, password]
     );
 
     req.session.customerId = result.rows[0].id;
     req.session.customerName = name;
     req.session.customerEmail = email;
     req.session.customerAddress = '';
-
     res.redirect('/');
   } catch (err) {
     console.error(err);
@@ -88,9 +87,11 @@ router.get('/logout', (req, res) => {
 
 router.get('/account', async (req, res) => {
   if (!req.session.customerId) return res.redirect('/auth/login');
+
   try {
     const result = await pool.query('SELECT * FROM customers WHERE id = $1', [req.session.customerId]);
     if (result.rows.length === 0) return res.redirect('/auth/login');
+
     res.render('auth/account', { customer: result.rows[0], success: null, error: null });
   } catch (err) {
     console.error(err);
@@ -100,6 +101,7 @@ router.get('/account', async (req, res) => {
 
 router.post('/account', async (req, res) => {
   if (!req.session.customerId) return res.redirect('/auth/login');
+
   const { action } = req.body;
 
   try {
@@ -114,11 +116,7 @@ router.post('/account', async (req, res) => {
         return res.render('auth/account', { customer, success: null, error: 'Name and email are required' });
       }
 
-      const existing = await pool.query(
-        'SELECT id FROM customers WHERE email = $1 AND id != $2',
-        [email, req.session.customerId]
-      );
-
+      const existing = await pool.query('SELECT id FROM customers WHERE email = $1 AND id != $2', [email, req.session.customerId]);
       if (existing.rows.length > 0) {
         return res.render('auth/account', { customer, success: null, error: 'This email is already in use by another account' });
       }
@@ -143,9 +141,8 @@ router.post('/account', async (req, res) => {
         return res.render('auth/account', { customer, success: null, error: 'All password fields are required' });
       }
 
-      const currentHash = customer.password_hash || '';
-      const match = currentHash ? await bcrypt.compare(current_password, currentHash) : false;
-
+      const stored = customer.password_hash;
+      const match = (current_password === stored);
       if (!match) {
         return res.render('auth/account', { customer, success: null, error: 'Current password is incorrect' });
       }
@@ -158,10 +155,9 @@ router.post('/account', async (req, res) => {
         return res.render('auth/account', { customer, success: null, error: 'New password must be at least 6 characters' });
       }
 
-      const hash = await bcrypt.hash(new_password, 10);
-      await pool.query('UPDATE customers SET password_hash = $1 WHERE id = $2', [hash, req.session.customerId]);
-
-      return res.render('auth/account', { customer, success: 'Password updated successfully', error: null });
+      await pool.query('UPDATE customers SET password_hash = $1 WHERE id = $2', [new_password, req.session.customerId]);
+      const updated = await pool.query('SELECT * FROM customers WHERE id = $1', [req.session.customerId]);
+      return res.render('auth/account', { customer: updated.rows[0], success: 'Password updated successfully', error: null });
     }
 
     res.redirect('/auth/account');
@@ -175,16 +171,18 @@ router.get('/reviews', async (req, res) => {
   if (!req.session.customerId) return res.redirect('/auth/login');
 
   try {
-    const reviews = await pool.query(`
+    const reviews = await pool.query(
+      `
       SELECT r.*, p.name as product_name, p.image_url as product_image
       FROM product_reviews r
       JOIN products p ON r.product_id = p.id
       WHERE r.customer_id = $1
       ORDER BY r.created_at DESC
-    `, [req.session.customerId]);
+    `,
+      [req.session.customerId]
+    );
 
     const editId = req.query.edit ? parseInt(req.query.edit) : null;
-
     res.render('auth/reviews', { reviews: reviews.rows, editingReviewId: editId, success: null, error: null });
   } catch (err) {
     console.error(err);
@@ -218,10 +216,7 @@ router.post('/reviews/delete/:id', async (req, res) => {
   if (!req.session.customerId) return res.redirect('/auth/login');
 
   try {
-    await pool.query(
-      'DELETE FROM product_reviews WHERE id = $1 AND customer_id = $2',
-      [req.params.id, req.session.customerId]
-    );
+    await pool.query('DELETE FROM product_reviews WHERE id = $1 AND customer_id = $2', [req.params.id, req.session.customerId]);
     res.redirect('/auth/reviews');
   } catch (err) {
     console.error(err);
@@ -233,10 +228,7 @@ router.get('/orders', async (req, res) => {
   if (!req.session.customerId) return res.redirect('/auth/login');
 
   try {
-    const result = await pool.query(
-      'SELECT * FROM orders WHERE customer_id = $1 ORDER BY created_at DESC',
-      [req.session.customerId]
-    );
+    const result = await pool.query('SELECT * FROM orders WHERE customer_id = $1 ORDER BY created_at DESC', [req.session.customerId]);
     res.render('auth/orders', { orders: result.rows });
   } catch (err) {
     console.error(err);
