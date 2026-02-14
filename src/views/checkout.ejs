@@ -1,0 +1,14 @@
+<%- include('partials/header') %>
+<h1 class="page-title">Checkout</h1>
+<div class="checkout-container">
+  <p style="margin-bottom: 16px; color: var(--gray-700);">Ordering as <strong><%= customerName %></strong> (<%= customerEmail %>)</p>
+  <form action="/orders/checkout" method="POST" class="checkout-form">
+    <div class="form-group">
+      <label for="address">Shipping Address</label>
+      <textarea id="address" name="address" rows="3" required placeholder="123 Main St, City, State, ZIP"><%= customerAddress || '' %></textarea>
+    </div>
+    <button type="submit" class="btn btn-primary btn-large btn-block">Place Order</button>
+    <a href="/cart" class="btn btn-outline btn-block">Back to Cart</a>
+  </form>
+</div>
+<%- include('partials/footer') %>

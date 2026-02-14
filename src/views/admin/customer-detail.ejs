@@ -1,0 +1,67 @@
+<%- include('../partials/admin-header') %>
+
+<div class="admin-header">
+  <h1>Customer Details</h1>
+  <div class="admin-actions">
+    <a href="/admin/customers" class="btn btn-outline">Back to Customers</a>
+    <form action="/admin/customers/delete/<%= customer.id %>" method="POST" style="display:inline" onsubmit="return confirm('Delete this customer? Their orders will be kept but unlinked.')">
+      <button type="submit" class="btn btn-danger">Delete Customer</button>
+    </form>
+  </div>
+</div>
+
+<div class="order-info-grid">
+  <div class="info-card">
+    <h3>Name</h3>
+    <p><%= customer.name %></p>
+  </div>
+  <div class="info-card">
+    <h3>Email</h3>
+    <p><%= customer.email %></p>
+  </div>
+  <div class="info-card">
+    <h3>Registered</h3>
+    <p><%= new Date(customer.created_at).toLocaleDateString() %></p>
+  </div>
+</div>
+
+<% if (customer.address) { %>
+  <div class="info-card" style="margin-bottom: 24px;">
+    <h3>Address</h3>
+    <p><%= customer.address %></p>
+  </div>
+<% } %>
+
+<section class="admin-section">
+  <h2>Order History (<%= orders.length %>)</h2>
+  <% if (orders.length === 0) { %>
+    <p class="text-muted">This customer hasn't placed any orders yet.</p>
+  <% } else { %>
+    <div class="table-responsive">
+      <table class="admin-table">
+        <thead>
+          <tr>
+            <th>Order #</th>
+            <th>Total</th>
+            <th>Status</th>
+            <th>Date</th>
+            <th>Actions</th>
+          </tr>
+        </thead>
+        <tbody>
+          <% orders.forEach(order => { %>
+            <tr>
+              <td>#<%= order.id %></td>
+              <td>$<%= parseFloat(order.total).toFixed(2) %></td>
+              <td><span class="status-badge status-<%= order.status %>"><%= order.status %></span></td>
+              <td><%= new Date(order.created_at).toLocaleDateString() %></td>
+              <td><a href="/admin/orders/<%= order.id %>" class="btn btn-sm btn-outline">View</a></td>
+            </tr>
+          <% }) %>
+        </tbody>
+      </table>
+    </div>
+  <% } %>
+</section>
+
+<%- include('../partials/admin-footer') %>

@@ -1,0 +1,50 @@
+<%- include('partials/header') %>
+
+<section class="hero">
+  <h1>Welcome to StyleVault</h1>
+  <p>Discover your perfect style</p>
+  <a href="/shop" class="btn btn-primary hero-btn">Shop Now</a>
+</section>
+
+<section class="home-categories">
+  <h2>Browse by Category</h2>
+  <div class="category-cards">
+    <% categories.forEach(cat => { %>
+      <a href="/shop?category=<%= cat.slug %>" class="category-card">
+        <span><%= cat.name %></span>
+      </a>
+    <% }) %>
+  </div>
+</section>
+
+<section class="home-featured">
+  <div class="section-header">
+    <h2>New Arrivals</h2>
+    <a href="/shop" class="btn btn-outline btn-sm">View All</a>
+  </div>
+  <div class="product-grid featured-grid">
+    <% featured.forEach(product => { %>
+      <div class="product-card">
+        <a href="/product/<%= product.id %>">
+          <div class="product-image">
+            <img src="<%= product.image_url %>" alt="<%= product.name %>">
+          </div>
+          <div class="product-info">
+            <span class="product-category"><%= product.category_name || 'Uncategorized' %></span>
+            <h3><%= product.name %></h3>
+            <p class="product-price">$<%= parseFloat(product.price).toFixed(2) %></p>
+          </div>
+        </a>
+        <% if (product.stock > 0) { %>
+          <form action="/cart/add" method="POST">
+            <input type="hidden" name="productId" value="<%= product.id %>">
+            <input type="hidden" name="quantity" value="1">
+            <button type="submit" class="btn btn-primary add-to-cart">Add to Cart</button>
+          </form>
+        <% } %>
+      </div>
+    <% }) %>
+  </div>
+</section>
+
+<%- include('partials/footer') %>

@@ -1,0 +1,116 @@
+<%- include('../partials/admin-header') %>
+
+<h1 class="page-title"><%= product ? 'Edit Product' : 'Add New Product' %></h1>
+
+<% if (error) { %>
+  <div class="alert alert-error"><%= error %></div>
+<% } %>
+
+<% if (product && images.length > 0) { %>
+  <div class="form-container" style="margin-bottom: 24px;">
+    <label style="font-weight: 600; font-size: 1.05rem;">Current Images</label>
+    <p style="font-size: 0.85rem; color: var(--gray-500); margin-bottom: 12px;">Click "Set as Main" to choose which image appears on the shop page.</p>
+    <div class="product-images-grid">
+      <% images.forEach(img => { %>
+        <div class="product-image-card <%= img.is_main ? 'is-main' : '' %>">
+          <img src="<%= img.image_url %>" alt="Product image">
+          <div class="product-image-actions">
+            <% if (img.is_main) { %>
+              <span class="main-badge">Main Image</span>
+            <% } else { %>
+              <form action="/admin/products/images/main/<%= img.id %>" method="POST" style="display:inline">
+                <button type="submit" class="btn btn-sm btn-outline">Set as Main</button>
+              </form>
+            <% } %>
+            <form action="/admin/products/images/delete/<%= img.id %>" method="POST" style="display:inline" onsubmit="return confirm('Delete this image?')">
+              <button type="submit" class="btn btn-sm btn-danger">Delete</button>
+            </form>
+          </div>
+        </div>
+      <% }) %>
+    </div>
+  </div>
+<% } %>
+
+<div class="form-container">
+  <form action="/admin/products/<%= product ? 'edit/' + product.id : 'new' %>" method="POST" enctype="multipart/form-data" class="admin-form">
+    <div class="form-group">
+      <label for="name">Product Name</label>
+      <input type="text" id="name" name="name" required value="<%= product ? product.name : '' %>">
+    </div>
+    <div class="form-group">
+      <label for="description">Description</label>
+      <textarea id="description" name="description" rows="4"><%= product ? product.description : '' %></textarea>
+    </div>
+    <div class="form-row">
+      <div class="form-group">
+        <label for="price">Price ($)</label>
+        <input type="number" id="price" name="price" step="0.01" min="0" required value="<%= product ? product.price : '' %>">
+      </div>
+      <div class="form-group">
+        <label for="stock">Stock</label>
+        <input type="number" id="stock" name="stock" min="0" required value="<%= product ? product.stock : '0' %>">
+      </div>
+    </div>
+    <div class="form-group">
+      <label for="category_id">Category</label>
+      <select id="category_id" name="category_id">
+        <option value="">-- Select Category --</option>
+        <% categories.forEach(cat => { %>
+          <option value="<%= cat.id %>" <%= product && product.category_id === cat.id ? 'selected' : '' %>><%= cat.name %></option>
+        <% }) %>
+      </select>
+    </div>
+
+    <div class="form-group">
+      <label>Product Perks</label>
+      <p style="font-size: 0.85rem; color: var(--gray-500); margin-bottom: 8px;">Check to enable a perk and customize its display text.</p>
+      <div class="perks-editor">
+        <div class="perk-row">
+          <label class="checkbox-label">
+            <input type="checkbox" name="perk_free_delivery" <%= product && product.perk_free_delivery ? 'checked' : '' %>>
+            <span class="perk-icon-preview">🚚</span>
+          </label>
+          <input type="text" name="perk_free_delivery_text" class="perk-text-input" value="<%= product && product.perk_free_delivery_text ? product.perk_free_delivery_text : 'Free Delivery on All Orders' %>" placeholder="Free Delivery on All Orders">
+        </div>
+        <div class="perk-row">
+          <label class="checkbox-label">
+            <input type="checkbox" name="perk_free_returns" <%= product && product.perk_free_returns ? 'checked' : '' %>>
+            <span class="perk-icon-preview">↩️</span>
+          </label>
+          <input type="text" name="perk_free_returns_text" class="perk-text-input" value="<%= product && product.perk_free_returns_text ? product.perk_free_returns_text : 'FREE 15-Day Returns' %>" placeholder="FREE 15-Day Returns">
+        </div>
+        <div class="perk-row">
+          <label class="checkbox-label">
+            <input type="checkbox" name="perk_buy_now_pay_later" <%= product && product.perk_buy_now_pay_later ? 'checked' : '' %>>
+            <span class="perk-icon-preview">💳</span>
+          </label>
+          <input type="text" name="perk_buy_now_pay_later_text" class="perk-text-input" value="<%= product && product.perk_buy_now_pay_later_text ? product.perk_buy_now_pay_later_text : 'Buy Now, Pay Later with Tamara & Tabby' %>" placeholder="Buy Now, Pay Later with Tamara & Tabby">
+        </div>
+        <div class="perk-row">
+          <label class="checkbox-label">
+            <input type="checkbox" name="perk_next_day_riyadh" <%= product && product.perk_next_day_riyadh ? 'checked' : '' %>>
+            <span class="perk-icon-preview">⚡</span>
+          </label>
+          <input type="text" name="perk_next_day_riyadh_text" class="perk-text-input" value="<%= product && product.perk_next_day_riyadh_text ? product.perk_next_day_riyadh_text : 'Free Next Day Delivery in Riyadh' %>" placeholder="Free Next Day Delivery in Riyadh">
+        </div>
+      </div>
+    </div>
+
+    <div class="form-group">
+      <label for="images"><%= product ? 'Add More Images' : 'Product Images' %></label>
+      <p style="font-size: 0.85rem; color: var(--gray-500); margin-bottom: 8px;">You can select multiple images at once. <% if (!product) { %>The first image will be set as the main image by default.<% } %></p>
+      <input type="file" id="images" name="images" accept="image/*" multiple>
+      <% if (!product) { %>
+        <input type="hidden" name="main_image_index" value="0">
+      <% } %>
+    </div>
+
+    <div class="form-actions">
+      <button type="submit" class="btn btn-primary btn-large"><%= product ? 'Update Product' : 'Add Product' %></button>
+      <a href="/admin" class="btn btn-outline">Cancel</a>
+    </div>
+  </form>
+</div>
+
+<%- include('../partials/admin-footer') %>
