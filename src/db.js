@@ -8,7 +8,7 @@ if (!connectionString) {
   throw new Error('DATABASE_URL is required');
 }
 
-// Neon يحتاج SSL
+// Neon needs SSL
 const pool = new Pool({
   connectionString,
   ssl: { rejectUnauthorized: false },
@@ -32,6 +32,24 @@ async function addColIfMissing(client, table, column, ddlType) {
   }
 }
 
+async function indexExists(client, indexName) {
+  const q = `
+    SELECT 1
+    FROM pg_indexes
+    WHERE schemaname='public' AND indexname=$1
+    LIMIT 1
+  `;
+  const r = await client.query(q, [indexName]);
+  return r.rows.length > 0;
+}
+
+async function ensureUniqueIndex(client, indexName, table, column) {
+  const exists = await indexExists(client, indexName);
+  if (!exists) {
+    await client.query(`CREATE UNIQUE INDEX ${indexName} ON ${table}(${column})`);
+  }
+}
+
 async function initDB() {
   const client = await pool.connect();
   try {
@@ -42,10 +60,13 @@ async function initDB() {
       CREATE TABLE IF NOT EXISTS categories (
         id SERIAL PRIMARY KEY,
         name TEXT NOT NULL,
-        slug TEXT UNIQUE,
+        slug TEXT,
         created_at TIMESTAMP DEFAULT NOW()
       )
     `);
+
+    // ensure unique slug for ON CONFLICT safety if used later
+    await ensureUniqueIndex(client, 'categories_slug_unique', 'categories', 'slug');
 
     // ---- products
     await client.query(`
@@ -54,13 +75,13 @@ async function initDB() {
         name TEXT NOT NULL,
         description TEXT,
         price NUMERIC(10,2) NOT NULL DEFAULT 0,
-        category_id INTEGER REFERENCES categories(id) ON DELETE SET NULL,
         image_url TEXT DEFAULT '/images/placeholder.png',
+        category_id INTEGER REFERENCES categories(id) ON DELETE SET NULL,
         created_at TIMESTAMP DEFAULT NOW()
       )
     `);
 
-    // columns needed by your code
+    // columns used by code
     await addColIfMissing(client, 'products', 'stock', 'INTEGER NOT NULL DEFAULT 0');
 
     await addColIfMissing(client, 'products', 'perk_free_delivery', 'BOOLEAN NOT NULL DEFAULT FALSE');
@@ -68,44 +89,62 @@ async function initDB() {
     await addColIfMissing(client, 'products', 'perk_buy_now_pay_later', 'BOOLEAN NOT NULL DEFAULT FALSE');
     await addColIfMissing(client, 'products', 'perk_next_day_riyadh', 'BOOLEAN NOT NULL DEFAULT FALSE');
 
-    await addColIfMissing(client, 'products', 'perk_free_delivery_text', "TEXT NOT NULL DEFAULT 'Free Delivery on All Orders'");
-    await addColIfMissing(client, 'products', 'perk_free_returns_text', "TEXT NOT NULL DEFAULT 'FREE 15-Day Returns'");
-    await addColIfMissing(client, 'products', 'perk_buy_now_pay_later_text', "TEXT NOT NULL DEFAULT 'Buy Now, Pay Later with Tamara & Tabby'");
-    await addColIfMissing(client, 'products', 'perk_next_day_riyadh_text', "TEXT NOT NULL DEFAULT 'Free Next Day Delivery in Riyadh'");
+    await addColIfMissing(
+      client,
+      'products',
+      'perk_free_delivery_text',
+      "TEXT DEFAULT 'Free Delivery on All Orders'"
+    );
+    await addColIfMissing(
+      client,
+      'products',
+      'perk_free_returns_text',
+      "TEXT DEFAULT 'FREE 15-Day Returns'"
+    );
+    await addColIfMissing(
+      client,
+      'products',
+      'perk_buy_now_pay_later_text',
+      "TEXT DEFAULT 'Buy Now, Pay Later with Tamara & Tabby'"
+    );
+    await addColIfMissing(
+      client,
+      'products',
+      'perk_next_day_riyadh_text',
+      "TEXT DEFAULT 'Free Next Day Delivery in Riyadh'"
+    );
 
     // ---- product_images
     await client.query(`
       CREATE TABLE IF NOT EXISTS product_images (
         id SERIAL PRIMARY KEY,
-        product_id INTEGER NOT NULL REFERENCES products(id) ON DELETE CASCADE,
+        product_id INTEGER REFERENCES products(id) ON DELETE CASCADE,
         image_url TEXT NOT NULL,
         is_main BOOLEAN NOT NULL DEFAULT FALSE,
-        sort_order INTEGER NOT NULL DEFAULT 0,
-        created_at TIMESTAMP DEFAULT NOW()
+        sort_order INTEGER NOT NULL DEFAULT 0
       )
     `);
 
-    // ---- customers
+    // ---- customers (match your Neon schema)
     await client.query(`
       CREATE TABLE IF NOT EXISTS customers (
         id SERIAL PRIMARY KEY,
         name TEXT NOT NULL,
         email TEXT UNIQUE NOT NULL,
         address TEXT,
-        phone TEXT,
-        created_at TIMESTAMP DEFAULT NOW()
+        created_at TIMESTAMP DEFAULT NOW(),
+        password_hash TEXT NOT NULL
       )
     `);
 
-    // make sure password_hash exists and NOT NULL
-    await addColIfMissing(client, 'customers', 'password_hash', 'TEXT');
-    // لو موجود NULL قديم، خليه فاضي بدل NULL عشان مايكسرش compare
+    // if table existed without password_hash in old versions
+    await addColIfMissing(client, 'customers', 'password_hash', "TEXT NOT NULL DEFAULT ''");
+
+    // normalize old nulls
     await client.query(`UPDATE customers SET password_hash = '' WHERE password_hash IS NULL`);
-    // خليه NOT NULL
-    await client.query(`
-      ALTER TABLE customers
-      ALTER COLUMN password_hash SET DEFAULT ''
-    `);
+
+    // enforce default/not null safely
+    await client.query(`ALTER TABLE customers ALTER COLUMN password_hash SET DEFAULT ''`);
     await client.query(`
       DO $$
       BEGIN
@@ -115,62 +154,75 @@ async function initDB() {
       END $$;
     `);
 
-    // ---- orders
+    // ---- orders (match your Neon schema)
     await client.query(`
       CREATE TABLE IF NOT EXISTS orders (
         id SERIAL PRIMARY KEY,
         customer_id INTEGER REFERENCES customers(id) ON DELETE SET NULL,
         total NUMERIC(10,2) NOT NULL DEFAULT 0,
-        status TEXT NOT NULL DEFAULT 'pending',
-        created_at TIMESTAMP DEFAULT NOW()
+        status TEXT,
+        created_at TIMESTAMP DEFAULT NOW(),
+        customer_name TEXT,
+        customer_email TEXT,
+        customer_address TEXT
       )
     `);
 
-    // snapshot columns expected by your orders.js
+    // ensure snapshot columns exist even if older table
     await addColIfMissing(client, 'orders', 'customer_name', 'TEXT');
     await addColIfMissing(client, 'orders', 'customer_email', 'TEXT');
     await addColIfMissing(client, 'orders', 'customer_address', 'TEXT');
 
-    // ---- order_items
+    // ---- order_items (match your Neon schema: product_name exists)
     await client.query(`
       CREATE TABLE IF NOT EXISTS order_items (
         id SERIAL PRIMARY KEY,
-        order_id INTEGER NOT NULL REFERENCES orders(id) ON DELETE CASCADE,
+        order_id INTEGER REFERENCES orders(id) ON DELETE CASCADE,
         product_id INTEGER REFERENCES products(id) ON DELETE SET NULL,
-        name TEXT NOT NULL,
+        quantity INTEGER NOT NULL DEFAULT 1,
         price NUMERIC(10,2) NOT NULL DEFAULT 0,
-        quantity INTEGER NOT NULL DEFAULT 1
+        product_name TEXT
       )
     `);
 
-    // ---- product_reviews
+    // if old table exists with different cols, ensure product_name exists
+    await addColIfMissing(client, 'order_items', 'product_name', 'TEXT');
+
+    // ---- product_reviews (your Neon schema uses comment, not review_text)
     await client.query(`
       CREATE TABLE IF NOT EXISTS product_reviews (
         id SERIAL PRIMARY KEY,
-        product_id INTEGER NOT NULL REFERENCES products(id) ON DELETE CASCADE,
-        customer_id INTEGER NOT NULL REFERENCES customers(id) ON DELETE CASCADE,
+        product_id INTEGER REFERENCES products(id) ON DELETE CASCADE,
+        customer_id INTEGER REFERENCES customers(id) ON DELETE CASCADE,
         rating INTEGER NOT NULL CHECK (rating >= 1 AND rating <= 5),
-        review_text TEXT,
+        comment TEXT,
         created_at TIMESTAMP DEFAULT NOW()
       )
     `);
 
-    // ---- roles / permissions (for admin panel)
+    // ---- roles / permissions (match your Neon schema)
     await client.query(`
       CREATE TABLE IF NOT EXISTS roles (
         id SERIAL PRIMARY KEY,
-        name TEXT UNIQUE NOT NULL,
-        description TEXT DEFAULT ''
+        name TEXT NOT NULL,
+        description TEXT NOT NULL DEFAULT ''
       )
     `);
+    await ensureUniqueIndex(client, 'roles_name_unique', 'roles', 'name');
 
     await client.query(`
       CREATE TABLE IF NOT EXISTS permissions (
         id SERIAL PRIMARY KEY,
-        key TEXT UNIQUE NOT NULL,
-        label TEXT NOT NULL
+        name TEXT NOT NULL,
+        key TEXT,
+        label TEXT
       )
     `);
+
+    // IMPORTANT: ON CONFLICT (key) needs a UNIQUE index on permissions.key
+    // Your DB might have existed before key was unique -> create unique index now.
+    // Note: if there are duplicate keys, this will fail; then you must dedupe once.
+    await ensureUniqueIndex(client, 'permissions_key_unique', 'permissions', 'key');
 
     await client.query(`
       CREATE TABLE IF NOT EXISTS role_permissions (
@@ -183,15 +235,16 @@ async function initDB() {
     await client.query(`
       CREATE TABLE IF NOT EXISTS admin_users (
         id SERIAL PRIMARY KEY,
-        username TEXT UNIQUE NOT NULL,
+        username TEXT NOT NULL,
         password_hash TEXT NOT NULL,
-        is_super_admin BOOLEAN NOT NULL DEFAULT FALSE,
-        role_id INTEGER REFERENCES roles(id) ON DELETE SET NULL,
-        created_at TIMESTAMP DEFAULT NOW()
+        is_super_admin BOOLEAN DEFAULT FALSE,
+        created_at TIMESTAMP DEFAULT NOW(),
+        role_id INTEGER REFERENCES roles(id) ON DELETE SET NULL
       )
     `);
+    await ensureUniqueIndex(client, 'admin_users_username_unique', 'admin_users', 'username');
 
-    // seed permissions
+    // ---- seed permissions (safe with ON CONFLICT after unique index)
     const defaultPerms = [
       ['view_dashboard', 'View Dashboard'],
       ['manage_products', 'Manage Products'],
@@ -206,14 +259,17 @@ async function initDB() {
 
     for (const [key, label] of defaultPerms) {
       await client.query(
-        `INSERT INTO permissions (key, label)
-         VALUES ($1, $2)
-         ON CONFLICT (key) DO NOTHING`,
+        `
+        INSERT INTO permissions (key, label, name)
+        VALUES ($1, $2, $1)
+        ON CONFLICT (key) DO UPDATE SET
+          label = EXCLUDED.label
+        `,
         [key, label]
       );
     }
 
-    // seed admin user if none exists
+    // ---- seed admin user if none exists
     const adminCount = await client.query(`SELECT COUNT(*)::int AS c FROM admin_users`);
     if (adminCount.rows[0].c === 0) {
       const adminPassword = process.env.ADMIN_PASSWORD || 'admin123';
