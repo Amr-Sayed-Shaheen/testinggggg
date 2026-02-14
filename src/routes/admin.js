@@ -11,11 +11,16 @@ const storage = multer.diskStorage({
     cb(null, Date.now() + '-' + file.originalname.replace(/\s/g, '-'));
   }
 });
-const upload = multer({ storage, fileFilter: (req, file, cb) => {
-  const ext = path.extname(file.originalname).toLowerCase();
-  if (['.png', '.jpg', '.jpeg', '.gif', '.webp'].includes(ext)) cb(null, true);
-  else cb(null, false);
-}, limits: { fileSize: 10 * 1024 * 1024 } });
+
+const upload = multer({
+  storage,
+  fileFilter: (req, file, cb) => {
+    const ext = path.extname(file.originalname).toLowerCase();
+    if (['.png', '.jpg', '.jpeg', '.gif', '.webp'].includes(ext)) cb(null, true);
+    else cb(null, false);
+  },
+  limits: { fileSize: 10 * 1024 * 1024 }
+});
 
 function handleUpload(fieldName, maxCount) {
   return (req, res, next) => {
@@ -36,12 +41,16 @@ function requireAdmin(req, res, next) {
 }
 
 function requirePermission(...keys) {
-  return (req, res, next) => {
+  return async (req, res, next) => {
+    // سوبر أدمن يدخل أي حاجة
     if (req.session.isSuperAdmin) return next();
+
+    // لو مفيش permissions في السيشن، اعتبره ممنوع
     const userPerms = req.session.permissions || [];
     const hasAll = keys.every(k => userPerms.includes(k));
     if (hasAll) return next();
-    res.status(403).render('admin/no-access');
+
+    return res.status(403).render('admin/no-access');
   };
 }
 
@@ -52,28 +61,46 @@ router.get('/login', (req, res) => {
 router.post('/login', async (req, res) => {
   const { username, password } = req.body;
   try {
-    const result = await pool.query('SELECT * FROM admin_users WHERE username = $1', [username]);
+    const result = await pool.query(
+      'SELECT * FROM admin_users WHERE username = $1',
+      [username]
+    );
+
     if (result.rows.length === 0) {
       return res.render('admin/login', { error: 'Invalid credentials' });
     }
+
     const user = result.rows[0];
-    const valid = await bcrypt.compare(password, user.password);
+
+    // ✅ مهم: الكولم الصحيح هو password_hash
+    if (!user.password_hash) {
+      return res.render('admin/login', { error: 'Invalid credentials' });
+    }
+
+    const valid = await bcrypt.compare(password, user.password_hash);
     if (!valid) {
       return res.render('admin/login', { error: 'Invalid credentials' });
     }
+
     req.session.isAdmin = true;
     req.session.adminUserId = user.id;
     req.session.adminUsername = user.username;
     req.session.isSuperAdmin = user.is_super_admin || false;
 
+    // permissions/role (لو موجود role_id)
     if (user.role_id) {
       const perms = await pool.query(`
         SELECT p.key FROM permissions p
         JOIN role_permissions rp ON rp.permission_id = p.id
         WHERE rp.role_id = $1
       `, [user.role_id]);
+
       req.session.permissions = perms.rows.map(r => r.key);
-      const roleResult = await pool.query('SELECT name FROM roles WHERE id = $1', [user.role_id]);
+
+      const roleResult = await pool.query(
+        'SELECT name FROM roles WHERE id = $1',
+        [user.role_id]
+      );
       req.session.roleName = roleResult.rows.length > 0 ? roleResult.rows[0].name : 'No Role';
     } else {
       req.session.permissions = [];
@@ -112,6 +139,7 @@ router.get('/', requireAdmin, requirePermission('view_dashboard'), async (req, r
       ORDER BY p.created_at DESC
       LIMIT $1 OFFSET $2
     `, [limit, offset]);
+
     const orders = await pool.query('SELECT * FROM orders ORDER BY created_at DESC LIMIT 20');
     const categories = await pool.query('SELECT * FROM categories ORDER BY name');
 
@@ -152,9 +180,11 @@ router.post('/products/new', requireAdmin, requirePermission('manage_products'),
   const perkFreeReturnsText = req.body.perk_free_returns_text || 'FREE 15-Day Returns';
   const perkBuyNowPayLaterText = req.body.perk_buy_now_pay_later_text || 'Buy Now, Pay Later with Tamara & Tabby';
   const perkNextDayRiyadhText = req.body.perk_next_day_riyadh_text || 'Free Next Day Delivery in Riyadh';
+
   const client = await pool.connect();
   try {
     await client.query('BEGIN');
+
     const firstImageUrl = (req.files && req.files.length > 0) ? `/images/${req.files[0].filename}` : '/images/placeholder.png';
     const mainIdx = parseInt(main_image_index) || 0;
     const mainImageUrl = (req.files && req.files[mainIdx]) ? `/images/${req.files[mainIdx].filename}` : firstImageUrl;
@@ -163,6 +193,7 @@ router.post('/products/new', requireAdmin, requirePermission('manage_products'),
       'INSERT INTO products (name, description, price, category_id, image_url, stock, perk_free_delivery, perk_free_returns, perk_buy_now_pay_later, perk_next_day_riyadh, perk_free_delivery_text, perk_free_returns_text, perk_buy_now_pay_later_text, perk_next_day_riyadh_text) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14) RETURNING id',
       [name, description, price, category_id || null, mainImageUrl, stock || 0, perkFreeDelivery, perkFreeReturns, perkBuyNowPayLater, perkNextDayRiyadh, perkFreeDeliveryText, perkFreeReturnsText, perkBuyNowPayLaterText, perkNextDayRiyadhText]
     );
+
     const productId = result.rows[0].id;
 
     if (req.files && req.files.length > 0) {
@@ -175,6 +206,7 @@ router.post('/products/new', requireAdmin, requirePermission('manage_products'),
         );
       }
     }
+
     await client.query('COMMIT');
     res.redirect('/admin');
   } catch (err) {
@@ -210,16 +242,21 @@ router.post('/products/edit/:id', requireAdmin, requirePermission('manage_produc
   const perkFreeReturnsText = req.body.perk_free_returns_text || 'FREE 15-Day Returns';
   const perkBuyNowPayLaterText = req.body.perk_buy_now_pay_later_text || 'Buy Now, Pay Later with Tamara & Tabby';
   const perkNextDayRiyadhText = req.body.perk_next_day_riyadh_text || 'Free Next Day Delivery in Riyadh';
+
   const client = await pool.connect();
   try {
     await client.query('BEGIN');
+
     await client.query(
       'UPDATE products SET name=$1, description=$2, price=$3, category_id=$4, stock=$5, perk_free_delivery=$6, perk_free_returns=$7, perk_buy_now_pay_later=$8, perk_next_day_riyadh=$9, perk_free_delivery_text=$10, perk_free_returns_text=$11, perk_buy_now_pay_later_text=$12, perk_next_day_riyadh_text=$13 WHERE id=$14',
       [name, description, price, category_id || null, stock || 0, perkFreeDelivery, perkFreeReturns, perkBuyNowPayLater, perkNextDayRiyadh, perkFreeDeliveryText, perkFreeReturnsText, perkBuyNowPayLaterText, perkNextDayRiyadhText, req.params.id]
     );
 
     if (req.files && req.files.length > 0) {
-      const maxOrder = await client.query('SELECT COALESCE(MAX(sort_order), -1) as max_order FROM product_images WHERE product_id = $1', [req.params.id]);
+      const maxOrder = await client.query(
+        'SELECT COALESCE(MAX(sort_order), -1) as max_order FROM product_images WHERE product_id = $1',
+        [req.params.id]
+      );
       let nextOrder = maxOrder.rows[0].max_order + 1;
       for (let i = 0; i < req.files.length; i++) {
         const imgUrl = `/images/${req.files[i].filename}`;
@@ -230,11 +267,18 @@ router.post('/products/edit/:id', requireAdmin, requirePermission('manage_produc
       }
     }
 
-    const mainImg = await client.query('SELECT image_url FROM product_images WHERE product_id = $1 AND is_main = TRUE LIMIT 1', [req.params.id]);
+    const mainImg = await client.query(
+      'SELECT image_url FROM product_images WHERE product_id = $1 AND is_main = TRUE LIMIT 1',
+      [req.params.id]
+    );
+
     if (mainImg.rows.length > 0) {
       await client.query('UPDATE products SET image_url = $1 WHERE id = $2', [mainImg.rows[0].image_url, req.params.id]);
     } else {
-      const firstImg = await client.query('SELECT image_url FROM product_images WHERE product_id = $1 ORDER BY sort_order, id LIMIT 1', [req.params.id]);
+      const firstImg = await client.query(
+        'SELECT image_url FROM product_images WHERE product_id = $1 ORDER BY sort_order, id LIMIT 1',
+        [req.params.id]
+      );
       if (firstImg.rows.length > 0) {
         await client.query('UPDATE products SET image_url = $1 WHERE id = $2', [firstImg.rows[0].image_url, req.params.id]);
       }
@@ -257,10 +301,12 @@ router.post('/products/images/main/:imageId', requireAdmin, requirePermission('m
     await client.query('BEGIN');
     const img = await client.query('SELECT * FROM product_images WHERE id = $1', [req.params.imageId]);
     if (img.rows.length === 0) { await client.query('ROLLBACK'); return res.redirect('/admin'); }
+
     const productId = img.rows[0].product_id;
     await client.query('UPDATE product_images SET is_main = FALSE WHERE product_id = $1', [productId]);
     await client.query('UPDATE product_images SET is_main = TRUE WHERE id = $1', [req.params.imageId]);
     await client.query('UPDATE products SET image_url = $1 WHERE id = $2', [img.rows[0].image_url, productId]);
+
     await client.query('COMMIT');
     res.redirect('/admin/products/edit/' + productId);
   } catch (err) {
@@ -278,11 +324,17 @@ router.post('/products/images/delete/:imageId', requireAdmin, requirePermission(
     await client.query('BEGIN');
     const img = await client.query('SELECT * FROM product_images WHERE id = $1', [req.params.imageId]);
     if (img.rows.length === 0) { await client.query('ROLLBACK'); return res.redirect('/admin'); }
+
     const productId = img.rows[0].product_id;
     const wasMain = img.rows[0].is_main;
+
     await client.query('DELETE FROM product_images WHERE id = $1', [req.params.imageId]);
+
     if (wasMain) {
-      const nextImg = await client.query('SELECT * FROM product_images WHERE product_id = $1 ORDER BY sort_order, id LIMIT 1', [productId]);
+      const nextImg = await client.query(
+        'SELECT * FROM product_images WHERE product_id = $1 ORDER BY sort_order, id LIMIT 1',
+        [productId]
+      );
       if (nextImg.rows.length > 0) {
         await client.query('UPDATE product_images SET is_main = TRUE WHERE id = $1', [nextImg.rows[0].id]);
         await client.query('UPDATE products SET image_url = $1 WHERE id = $2', [nextImg.rows[0].image_url, productId]);
@@ -290,6 +342,7 @@ router.post('/products/images/delete/:imageId', requireAdmin, requirePermission(
         await client.query('UPDATE products SET image_url = $1 WHERE id = $2', ['/images/placeholder.png', productId]);
       }
     }
+
     await client.query('COMMIT');
     res.redirect('/admin/products/edit/' + productId);
   } catch (err) {
@@ -332,6 +385,7 @@ router.post('/orders/:id/status', requireAdmin, requirePermission('manage_orders
       await client.query('ROLLBACK');
       return res.redirect('/admin');
     }
+
     const oldStatus = orderResult.rows[0].status;
     const confirmedStatuses = ['processing', 'shipped', 'delivered'];
     const wasConfirmed = confirmedStatuses.includes(oldStatus);
@@ -341,6 +395,7 @@ router.post('/orders/:id/status', requireAdmin, requirePermission('manage_orders
       'UPDATE orders SET status = $1 WHERE id = $2 AND status = $3',
       [newStatus, req.params.id, oldStatus]
     );
+
     if (updateResult.rowCount === 0) {
       await client.query('ROLLBACK');
       return res.redirect(`/admin/orders/${req.params.id}`);
@@ -431,6 +486,7 @@ router.get('/roles/edit/:id', requireAdmin, requirePermission('manage_roles'), a
     const permissions = await pool.query('SELECT * FROM permissions ORDER BY label');
     const rolePerms = await pool.query('SELECT permission_id FROM role_permissions WHERE role_id = $1', [req.params.id]);
     const assignedPermIds = rolePerms.rows.map(r => r.permission_id);
+
     res.render('admin/role-edit', {
       role: role.rows[0],
       permissions: permissions.rows,
@@ -451,11 +507,21 @@ router.post('/roles/edit/:id', requireAdmin, requirePermission('manage_roles'), 
   const client = await pool.connect();
   try {
     await client.query('BEGIN');
-    await client.query('UPDATE roles SET name = $1, description = $2 WHERE id = $3', [name, description || '', req.params.id]);
+
+    await client.query(
+      'UPDATE roles SET name = $1, description = $2 WHERE id = $3',
+      [name, description || '', req.params.id]
+    );
+
     await client.query('DELETE FROM role_permissions WHERE role_id = $1', [req.params.id]);
+
     for (const permId of permissionIds) {
-      await client.query('INSERT INTO role_permissions (role_id, permission_id) VALUES ($1, $2)', [req.params.id, permId]);
+      await client.query(
+        'INSERT INTO role_permissions (role_id, permission_id) VALUES ($1, $2)',
+        [req.params.id, permId]
+      );
     }
+
     await client.query('COMMIT');
   } catch (err) {
     await client.query('ROLLBACK');
@@ -463,6 +529,7 @@ router.post('/roles/edit/:id', requireAdmin, requirePermission('manage_roles'), 
   } finally {
     client.release();
   }
+
   res.redirect('/admin/roles');
 });
 
@@ -485,6 +552,7 @@ router.get('/users', requireAdmin, requirePermission('manage_users'), async (req
       LEFT JOIN roles r ON au.role_id = r.id
       ORDER BY au.id
     `);
+
     const roles = await pool.query('SELECT * FROM roles ORDER BY name');
     res.render('admin/users', { users: users.rows, roles: roles.rows, error: null, success: null });
   } catch (err) {
@@ -504,11 +572,15 @@ router.post('/users/new', requireAdmin, requirePermission('manage_users'), async
       const roles = await pool.query('SELECT * FROM roles ORDER BY name');
       return res.render('admin/users', { users: users.rows, roles: roles.rows, error: 'Username already exists', success: null });
     }
+
     const hash = await bcrypt.hash(password, 10);
+
+    // ✅ مهم: الكولم الصحيح هو password_hash
     await pool.query(
-      'INSERT INTO admin_users (username, password, role_id, is_super_admin) VALUES ($1, $2, $3, FALSE)',
+      'INSERT INTO admin_users (username, password_hash, role_id, is_super_admin) VALUES ($1, $2, $3, FALSE)',
       [username, hash, role_id || null]
     );
+
     res.redirect('/admin/users');
   } catch (err) {
     console.error(err);
@@ -544,11 +616,12 @@ router.get('/customers', requireAdmin, requirePermission('manage_customers'), as
 
     let countQuery = 'SELECT COUNT(*) FROM customers';
     let dataQuery = `
-      SELECT c.*, 
+      SELECT c.*,
         (SELECT COUNT(*) FROM orders WHERE customer_id = c.id) as order_count,
         (SELECT COALESCE(SUM(total), 0) FROM orders WHERE customer_id = c.id AND status IN ('processing', 'shipped', 'delivered')) as total_spent
       FROM customers c
     `;
+
     const params = [];
 
     if (search) {
@@ -584,10 +657,12 @@ router.get('/customers/:id', requireAdmin, requirePermission('manage_customers')
   try {
     const customer = await pool.query('SELECT * FROM customers WHERE id = $1', [req.params.id]);
     if (customer.rows.length === 0) return res.redirect('/admin/customers');
+
     const orders = await pool.query(
       'SELECT * FROM orders WHERE customer_id = $1 ORDER BY created_at DESC',
       [req.params.id]
     );
+
     res.render('admin/customer-detail', {
       customer: customer.rows[0],
       orders: orders.rows
@@ -636,6 +711,7 @@ router.get('/reviews', requireAdmin, requirePermission('manage_reviews'), async 
       `SELECT COUNT(*) FROM product_reviews r JOIN products p ON r.product_id = p.id JOIN customers c ON r.customer_id = c.id ${whereClause}`,
       params
     );
+
     const totalReviews = parseInt(countResult.rows[0].count);
     const totalPages = Math.ceil(totalReviews / limit);
 
@@ -677,6 +753,7 @@ router.post('/orders/delete/:id', requireAdmin, requirePermission('manage_orders
   const client = await pool.connect();
   try {
     await client.query('BEGIN');
+
     const order = await client.query('SELECT status FROM orders WHERE id = $1 FOR UPDATE', [req.params.id]);
     if (order.rows.length > 0) {
       const confirmedStatuses = ['processing', 'shipped', 'delivered'];
@@ -688,9 +765,11 @@ router.post('/orders/delete/:id', requireAdmin, requirePermission('manage_orders
           }
         }
       }
+
       await client.query('DELETE FROM order_items WHERE order_id = $1', [req.params.id]);
       await client.query('DELETE FROM orders WHERE id = $1', [req.params.id]);
     }
+
     await client.query('COMMIT');
   } catch (err) {
     await client.query('ROLLBACK');
@@ -698,6 +777,7 @@ router.post('/orders/delete/:id', requireAdmin, requirePermission('manage_orders
   } finally {
     client.release();
   }
+
   res.redirect('/admin');
 });
 
