@@ -43,7 +43,7 @@ function requirePermission(...keys) {
   return (req, res, next) => {
     if (req.session.isSuperAdmin) return next();
     const userPerms = req.session.permissions || [];
-    const hasAll = keys.every((k) => userPerms.includes(k));
+    const hasAll = keys.every(k => userPerms.includes(k));
     if (hasAll) return next();
     res.status(403).render('admin/no-access');
   };
@@ -57,7 +57,10 @@ router.post('/login', async (req, res) => {
   const { username, password } = req.body;
 
   try {
-    const result = await pool.query('SELECT * FROM admin_users WHERE username = $1', [username]);
+    const result = await pool.query(
+      'SELECT * FROM admin_users WHERE username = $1',
+      [username]
+    );
 
     if (result.rows.length === 0) {
       return res.render('admin/login', { error: 'Invalid credentials' });
@@ -65,7 +68,7 @@ router.post('/login', async (req, res) => {
 
     const user = result.rows[0];
 
-    // IMPORTANT: plain password mode (no hashing)
+    // Plain password mode: password is stored in password_hash column as text
     const stored = user.password_hash;
     if (typeof stored !== 'string' || stored.length === 0) {
       return res.render('admin/login', { error: 'Invalid credentials' });
@@ -81,33 +84,31 @@ router.post('/login', async (req, res) => {
     req.session.adminUsername = user.username;
     req.session.isSuperAdmin = user.is_super_admin || false;
 
-    // role handling (optional)
-    req.session.permissions = [];
-    req.session.roleName = 'No Role';
-
+    // load permissions/role if role_id exists
     if (user.role_id) {
-      try {
-        const perms = await pool.query(
-          `
-          SELECT p.key FROM permissions p
-          JOIN role_permissions rp ON rp.permission_id = p.id
-          WHERE rp.role_id = $1
-        `,
-          [user.role_id]
-        );
-        req.session.permissions = perms.rows.map((r) => r.key);
+      const perms = await pool.query(`
+        SELECT p.key
+        FROM permissions p
+        JOIN role_permissions rp ON rp.permission_id = p.id
+        WHERE rp.role_id = $1
+      `, [user.role_id]);
 
-        const roleResult = await pool.query('SELECT name FROM roles WHERE id = $1', [user.role_id]);
-        req.session.roleName = roleResult.rows.length > 0 ? roleResult.rows[0].name : 'No Role';
-      } catch (e) {
-        console.error('Role/permissions load failed:', e);
-      }
+      req.session.permissions = perms.rows.map(r => r.key);
+
+      const roleResult = await pool.query(
+        'SELECT name FROM roles WHERE id = $1',
+        [user.role_id]
+      );
+      req.session.roleName = roleResult.rows.length > 0 ? roleResult.rows[0].name : 'No Role';
+    } else {
+      req.session.permissions = [];
+      req.session.roleName = 'No Role';
     }
 
-    return res.redirect('/admin');
+    res.redirect('/admin');
   } catch (err) {
     console.error(err);
-    return res.render('admin/login', { error: 'Server error' });
+    res.render('admin/login', { error: 'Server error' });
   }
 });
 
@@ -117,6 +118,7 @@ router.get('/logout', (req, res) => {
   req.session.isSuperAdmin = false;
   req.session.permissions = [];
   req.session.roleName = null;
+  req.session.adminUsername = null;
   res.redirect('/');
 });
 
@@ -127,18 +129,16 @@ router.get('/', requireAdmin, requirePermission('view_dashboard'), async (req, r
     const offset = (page - 1) * limit;
 
     const productCount = await pool.query('SELECT COUNT(*) FROM products');
-    const totalProducts = parseInt(productCount.rows[0].count);
+    const totalProducts = parseInt(productCount.rows[0].count, 10);
     const totalPages = Math.ceil(totalProducts / limit);
 
-    const products = await pool.query(
-      `
+    const products = await pool.query(`
       SELECT p.*, c.name as category_name
-      FROM products p LEFT JOIN categories c ON p.category_id = c.id
+      FROM products p
+      LEFT JOIN categories c ON p.category_id = c.id
       ORDER BY p.created_at DESC
       LIMIT $1 OFFSET $2
-    `,
-      [limit, offset]
-    );
+    `, [limit, offset]);
 
     const orders = await pool.query('SELECT * FROM orders ORDER BY created_at DESC LIMIT 20');
     const categories = await pool.query('SELECT * FROM categories ORDER BY name');
@@ -184,29 +184,33 @@ router.post('/products/new', requireAdmin, requirePermission('manage_products'),
   const perkNextDayRiyadhText = req.body.perk_next_day_riyadh_text || 'Free Next Day Delivery in Riyadh';
 
   const client = await pool.connect();
-
   try {
     await client.query('BEGIN');
 
-    const firstImageUrl = (req.files && req.files.length > 0) ? `/images/${req.files[0].filename}` : '/images/placeholder.png';
-    const mainIdx = parseInt(main_image_index) || 0;
-    const mainImageUrl = (req.files && req.files[mainIdx]) ? `/images/${req.files[mainIdx].filename}` : firstImageUrl;
+    const firstImageUrl = (req.files && req.files.length > 0)
+      ? `/images/${req.files[0].filename}`
+      : '/images/placeholder.png';
+
+    const mainIdx = parseInt(main_image_index, 10) || 0;
+    const mainImageUrl = (req.files && req.files[mainIdx])
+      ? `/images/${req.files[mainIdx].filename}`
+      : firstImageUrl;
 
     const result = await client.query(
       `INSERT INTO products
-       (name, description, price, category_id, image_url, stock,
-        perk_free_delivery, perk_free_returns, perk_buy_now_pay_later, perk_next_day_riyadh,
-        perk_free_delivery_text, perk_free_returns_text, perk_buy_now_pay_later_text, perk_next_day_riyadh_text)
-       VALUES
-       ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14)
-       RETURNING id`,
+      (name, description, price, category_id, image_url, stock,
+       perk_free_delivery, perk_free_returns, perk_buy_now_pay_later, perk_next_day_riyadh,
+       perk_free_delivery_text, perk_free_returns_text, perk_buy_now_pay_later_text, perk_next_day_riyadh_text)
+      VALUES
+      ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14)
+      RETURNING id`,
       [
         name,
-        description,
+        description || '',
         price,
         category_id || null,
         mainImageUrl,
-        stock || 0,
+        Number(stock || 0),
         perkFreeDelivery,
         perkFreeReturns,
         perkBuyNowPayLater,
@@ -236,7 +240,6 @@ router.post('/products/new', requireAdmin, requirePermission('manage_products'),
   } catch (err) {
     await client.query('ROLLBACK');
     console.error(err);
-
     const categories = await pool.query('SELECT * FROM categories ORDER BY name');
     res.render('admin/product-form', { product: null, categories: categories.rows, images: [], error: 'Failed to create product' });
   } finally {
@@ -244,5 +247,58 @@ router.post('/products/new', requireAdmin, requirePermission('manage_products'),
   }
 });
 
-/* باقي الملف كما هو عندك بعد النقطة دي */
+/* ===== باقي routes بتاعتك زي ما هي (products edit/images/orders/categories/roles/users/customers/reviews) =====
+   ملاحظة مهمة: عدلت جزء users/new تحت عشان يخزن Plain في password_hash بدل bcrypt
+*/
+
+router.get('/users', requireAdmin, requirePermission('manage_users'), async (req, res) => {
+  try {
+    const users = await pool.query(`
+      SELECT au.*, r.name as role_name
+      FROM admin_users au
+      LEFT JOIN roles r ON au.role_id = r.id
+      ORDER BY au.id
+    `);
+    const roles = await pool.query('SELECT * FROM roles ORDER BY name');
+    res.render('admin/users', { users: users.rows, roles: roles.rows, error: null, success: null });
+  } catch (err) {
+    console.error(err);
+    res.status(500).send('Server error');
+  }
+});
+
+router.post('/users/new', requireAdmin, requirePermission('manage_users'), async (req, res) => {
+  const { username, password, role_id } = req.body;
+
+  try {
+    const existing = await pool.query('SELECT id FROM admin_users WHERE username = $1', [username]);
+    if (existing.rows.length > 0) {
+      const users = await pool.query(`
+        SELECT au.*, r.name as role_name
+        FROM admin_users au
+        LEFT JOIN roles r ON au.role_id = r.id
+        ORDER BY au.id
+      `);
+      const roles = await pool.query('SELECT * FROM roles ORDER BY name');
+      return res.render('admin/users', {
+        users: users.rows,
+        roles: roles.rows,
+        error: 'Username already exists',
+        success: null
+      });
+    }
+
+    // Plain password stored in password_hash
+    await pool.query(
+      'INSERT INTO admin_users (username, password_hash, role_id, is_super_admin) VALUES ($1, $2, $3, FALSE)',
+      [username, password, role_id || null]
+    );
+
+    res.redirect('/admin/users');
+  } catch (err) {
+    console.error(err);
+    res.redirect('/admin/users');
+  }
+});
+
 module.exports = router;
